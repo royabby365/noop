@@ -18,6 +18,15 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "3.0.1",
+          "buildVersion": "76",
+          "date": "2026-06-14",
+          "localizedDescription": "Cleaner score rings; sleep wake-time, steps & Android zone-coaching fixes.",
+          "downloadURL": "https://github.com/NoopApp/noop/releases/download/v3.0.1/NOOP-v3.0.1-ios.ipa",
+          "size": 13678476,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "3.0.0",
           "buildVersion": "75",
           "date": "2026-06-14",
@@ -406,12 +415,12 @@
           "NSHealthUpdateUsageDescription": "NOOP writes the metrics it computes from your strap back into Apple Health, on-device and only when you allow it."
         }
       },
-      "version": "3.0.0",
-      "buildVersion": "75",
+      "version": "3.0.1",
+      "buildVersion": "76",
       "versionDate": "2026-06-14",
-      "versionDescription": "A whole new look — Titanium & Gold. A complete redesign across iPhone, Android and Mac.",
-      "downloadURL": "https://github.com/NoopApp/noop/releases/download/v3.0.0/NOOP-v3.0.0-ios.ipa",
-      "size": 13677510,
+      "versionDescription": "Cleaner score rings; sleep wake-time, steps & Android zone-coaching fixes.",
+      "downloadURL": "https://github.com/NoopApp/noop/releases/download/v3.0.1/NOOP-v3.0.1-ios.ipa",
+      "size": 13678476,
       "minOSVersion": "17.0"
     }
   ],
