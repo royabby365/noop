@@ -45,6 +45,9 @@ struct HealthView: View {
                     // "fitness_age" metricSeries). Its own view depending only on `repo`/`profile`,
                     // so the live HR stream never re-renders it.
                     FitnessAgeSection()
+                    // Vitality / Body Age (weekly, computed by IntelligenceEngine from the mortality-
+                    // hazard model). Its own view depending only on repo/profile.
+                    VitalitySection()
                     // Screen-5 recovery detail: the CONTRIBUTORS to today's recovery as
                     // labelled progress bars (HRV / Resting HR / Sleep / Respiratory), each
                     // scored against the on-device baseline. Depends only on `repo`.
@@ -802,6 +805,110 @@ private struct ReadinessChecklistCard: View {
     }
 }
 
+// MARK: - Vitality / Body Age
+
+/// The "Vitality" section: a weekly wellness score (0–100) + a Body Age in years, computed by
+/// IntelligenceEngine from the published mortality-hazard model and read back from the metricSeries.
+/// A wellness trend from your habits — NOT a clinical biological age. Recomputes the live best/worst
+/// factor the same way the engine does, for the plain-English "why".
+private struct VitalitySection: View {
+    @EnvironmentObject var repo: Repository
+    @EnvironmentObject var profile: ProfileStore
+    @State private var vitality: Double?
+    @State private var bodyAge: Double?
+    @State private var loaded = false
+
+    private var contributions: [VitalityEngine.Contribution] {
+        let last7 = repo.days.suffix(7)
+        let nights = last7.compactMap { $0.totalSleepMin }.map { Double($0) / 60.0 }.filter { $0 > 0 }
+        let hrvs = last7.compactMap { $0.avgHrv }
+        let rhrs = last7.compactMap { $0.restingHr }.map(Double.init)
+        let steps = last7.compactMap { $0.steps }.map(Double.init)
+        func mean(_ a: [Double]) -> Double? { a.isEmpty ? nil : a.reduce(0, +) / Double(a.count) }
+        return VitalityEngine.contributions(.init(
+            chronoAge: Double(profile.age), restingHR: mean(rhrs), sleepHours: mean(nights),
+            sleepConsistency: VitalityEngine.sleepConsistency(nightlyHours: nights),
+            rmssd: mean(hrvs), rmssdNorm: VitalityEngine.rmssdNorm(forAge: Double(profile.age)),
+            steps: mean(steps)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+            SectionHeader("Vitality", overline: "Weekly",
+                          trailing: bodyAge != nil ? "Body Age \(Int((bodyAge ?? 0).rounded()))" : nil)
+            if let v = vitality, let ba = bodyAge {
+                hero(vitality: v, bodyAge: ba)
+            } else if loaded {
+                ComingSoon(what: "A few more days and we can show your Vitality.", symbol: "sparkles")
+            } else {
+                ComingSoon(what: "Reading your Vitality…", symbol: "sparkles")
+            }
+        }
+        .task(id: repo.refreshSeq) { await load() }
+    }
+
+    private func hero(vitality v: Double, bodyAge ba: Double) -> some View {
+        let delta = Double(profile.age) - ba
+        let younger = delta >= 0
+        let yrs = Int(abs(delta).rounded())
+        let sorted = contributions.sorted { $0.lnHazard < $1.lnHazard }
+        let best = sorted.first
+        let worst = sorted.last
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 18) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Vitality").strandOverline()
+                    Text("\(Int(v.rounded()))")
+                        .font(StrandFont.display(56))
+                        .foregroundStyle(StrandPalette.gold)
+                        .contentTransition(.numericText())
+                    Text("out of 100").font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
+                }
+                Spacer(minLength: 0)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Body Age").strandOverline()
+                    Text("\(Int(ba.rounded()))")
+                        .font(StrandFont.number(34)).foregroundStyle(StrandPalette.textPrimary)
+                    Text(yrs == 0 ? "about your age"
+                         : "\(yrs) yr\(yrs == 1 ? "" : "s") \(younger ? "younger" : "older")")
+                        .font(StrandFont.footnote)
+                        .foregroundStyle(younger ? StrandPalette.statusPositive : StrandPalette.statusWarning)
+                }
+            }
+            if (best?.lnHazard ?? 0) < 0 || (worst?.lnHazard ?? 0) > 0 {
+                Divider().overlay(StrandPalette.hairline)
+                if let best, best.lnHazard < 0 {
+                    Text("Helping most: \(best.label)")
+                        .font(StrandFont.footnote).foregroundStyle(StrandPalette.statusPositive)
+                }
+                if let worst, worst.lnHazard > 0 {
+                    Text("Holding you back: \(worst.label)")
+                        .font(StrandFont.footnote).foregroundStyle(StrandPalette.statusWarning)
+                }
+            }
+            Text("A wellness estimate from your habits — not a clinical biological age.")
+                .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            ScenicHeroBackground(domain: .charge)
+                .clipShape(RoundedRectangle(cornerRadius: NoopMetrics.cardRadius, style: .continuous))
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: NoopMetrics.cardRadius, style: .continuous)
+                .strokeBorder(StrandPalette.gold.opacity(0.18), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: NoopMetrics.cardRadius, style: .continuous))
+    }
+
+    private func load() async {
+        vitality = (await repo.exploreSeries(key: "vitality", source: "my-whoop")).last?.value
+        bodyAge = (await repo.exploreSeries(key: "body_age", source: "my-whoop")).last?.value
+        loaded = true
+    }
+}
+
 // MARK: - Vitals grid (uniform StatTiles)
 
 /// Static vitals grid, split into its own view so it depends only on `repo` and is
@@ -892,6 +999,16 @@ struct FitnessAgeDemoScreen: View {
     var body: some View {
         ScreenScaffold(title: "Health Monitor", subtitle: "Fitness Age", onRefresh: {}) {
             FitnessAgeSection()
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+/// Deterministic render target for `--demo-screen vitality` (pair with `--demo-seed`).
+struct VitalityDemoScreen: View {
+    var body: some View {
+        ScreenScaffold(title: "Health Monitor", subtitle: "Vitality", onRefresh: {}) {
+            VitalitySection()
         }
         .preferredColorScheme(.dark)
     }
