@@ -17,6 +17,15 @@ approximate; downloads are on the [Releases](https://noop.fans/NoopApp/noop/rele
 
 ---
 
+## 5.1.1 — Android design parity with iPhone & Mac (Android)
+
+An Android-only polish release that brings the Android app up to the iPhone/Mac design from 5.1.0 (iOS/macOS are unchanged and stay on 5.1.0).
+
+- **The home screen matches iPhone and Mac now.** One compact header row — avatar · ‹ Today › · bell · ＋ — replaces the old "Control Center" title, the separate logo bar and the standalone date pill. The hamburger menu and its navigation drawer are gone (they duplicated the **More** tab, which reaches every destination), and the four-tab bar floats above the gesture nav with proper breathing room.
+- **Cleaner rings.** The Charge / Effort / Rest rings no longer show a stray coloured dot on empty or calibrating states — Android's `Canvas` was rendering a near-zero round-capped arc as a full dot; it now draws the arc only above a real progress threshold, like iOS.
+- **Crisper, flatter, more consistent.** Neutral cards lose the gold-bevel tint for iOS's flat surface; display numerals are bold with the right tracking; numbers use tabular (non-monospace) figures; tiles match iOS height.
+- **Parity extras:** Health gained a **Sync now** section, Insights a **What moves you** shortcut, Trends an in-context **Export report** card, and Settings a dedicated **Profile photo** entry.
+
 ## 5.1.0 — a cleaner home: refreshed design, a new inbox, your photo (all platforms)
 
 A design-refresh release. Same NOOP underneath — a tidier, crisper home, somewhere for everything new to land, and a touch of you on the screen.

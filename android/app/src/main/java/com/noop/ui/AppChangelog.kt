@@ -25,7 +25,7 @@ object AppChangelog {
      * Bump this when you add a release below. The "What's New" sheet shows automatically when the
      * stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
      */
-    const val CURRENT_VERSION = "5.1.0"
+    const val CURRENT_VERSION = "5.1.1"
 
     data class Release(
         val version: String,
@@ -36,6 +36,16 @@ object AppChangelog {
 
     /** Newest first. */
     val releases: List<Release> = listOf(
+        Release(
+            version = "5.1.1",
+            title = "Polish — matched to the iPhone & Mac design",
+            date = "June 2026",
+            items = listOf(
+                "**The home screen now matches iPhone and Mac.** One clean header row — your photo, the day with its arrows, the bell and the **+**, all in line — and the four-tab bar floats with room to breathe above the navigation buttons. The old menu button is gone: everything still lives one tap away under **More**.",
+                "**Cleaner rings.** The little dots on the Charge / Effort / Rest rings now disappear when there's nothing to show yet, so empty and calibrating rings read calm and clean.",
+                "**Crisper across the board.** Flatter cards, bolder figures and tidier spacing on every screen, to match the rest of the app.",
+                "**Little extras brought over from iPhone:** a quick **Sync now** on Health, a **What moves you** shortcut on Insights, the **Export report** card right on Trends, and your **profile photo** in its own spot in Settings.",
+            )),
         Release(
             version = "5.1.0",
             title = "A cleaner home — refreshed design, a new inbox, your photo",
