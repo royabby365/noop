@@ -25,6 +25,9 @@ import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -121,22 +124,27 @@ fun UpdatesInboxScreen(
                     Text("Clear all", style = NoopType.subhead, color = Palette.textSecondary)
                 }
                 Spacer(Modifier.weight(1f))
-                TextButton(
+                Button(
                     onClick = { store.markAllRead() },
                     enabled = store.unreadCount > 0,
+                    // Filled accent PILL, matching the iOS "Mark all read" button (blue in light, gold in
+                    // dark). Icon + label inherit the button's contentColor.
+                    shape = RoundedCornerShape(percent = 50),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Palette.accent,
+                        contentColor = if (Palette.isLight) Color.White else Palette.goldDeepText,
+                        disabledContainerColor = Palette.surfaceInset,
+                        disabledContentColor = Palette.textTertiary,
+                    ),
                 ) {
                     Icon(
                         Icons.Outlined.DoneAll,
                         contentDescription = null,
-                        tint = if (store.unreadCount > 0) Palette.accent else Palette.textTertiary,
                         modifier = Modifier.size(Metrics.iconSmall),
                     )
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        "Mark all read",
-                        style = NoopType.subhead,
-                        color = if (store.unreadCount > 0) Palette.accent else Palette.textTertiary,
-                    )
+                    Text("Mark all read", style = NoopType.subhead)
                 }
             }
         }
