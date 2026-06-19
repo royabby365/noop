@@ -18,6 +18,15 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "5.0.1",
+          "buildVersion": "128",
+          "date": "2026-06-19",
+          "localizedDescription": "NOOP v5.0.1 — stability & polish for the v5 release.",
+          "downloadURL": "https://noop.fans/NoopApp/noop/releases/download/v5.0.1/NOOP-v5.0.1-ios.ipa",
+          "size": 9101681,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "5.0.0",
           "buildVersion": "127",
           "date": "2026-06-19",
@@ -784,12 +793,12 @@
           "NSHealthUpdateUsageDescription": "NOOP writes the metrics it computes from your strap back into Apple Health, on-device and only when you allow it."
         }
       },
-      "version": "5.0.0",
-      "buildVersion": "127",
+      "version": "5.0.1",
+      "buildVersion": "128",
       "versionDate": "2026-06-19",
-      "versionDescription": "NOOP v5.0.0 — the raw-signal release: haptic biofeedback, Insights What Moves You, skin-temp suite, Your Data Fused, Lab Book, experimental Rhythm.",
-      "downloadURL": "https://noop.fans/NoopApp/noop/releases/download/v5.0.0/NOOP-v5.0.0-ios.ipa",
-      "size": 9101163,
+      "versionDescription": "NOOP v5.0.1 — stability & polish for the v5 release.",
+      "downloadURL": "https://noop.fans/NoopApp/noop/releases/download/v5.0.1/NOOP-v5.0.1-ios.ipa",
+      "size": 9101681,
       "minOSVersion": "17.0"
     }
   ],
