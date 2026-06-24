@@ -237,10 +237,14 @@ struct BackfillContinuation {
     /// Hard cap on consecutive auto-continues per connection (resets on disconnect). 6 × ~60s ≈ 6 min of
     /// back-to-back draining — enough to chew through a multi-night backlog far faster than the 15-min
     /// floor, without letting a misbehaving strap monopolise Bluetooth.
-    static let defaultMaxAutoContinues = 6
+    /// @deprecated Use Thresholds.backfillContinuationMaxAutoContinues
+    @available(*, deprecated, message: "Use Thresholds.backfillContinuationMaxAutoContinues")
+    static let defaultMaxAutoContinues = Thresholds.backfillContinuationMaxAutoContinues
     /// How far ahead the strap must be (seconds) before "more backlog remains" is real, not clock noise.
     /// Matches StuckStrapDetector.behindGapSeconds (5 min) so the two agree on "behind".
-    static let defaultBehindGapSeconds = 300
+    /// @deprecated Use Thresholds.backfillContinuationBehindGapSeconds
+    @available(*, deprecated, message: "Use Thresholds.backfillContinuationBehindGapSeconds")
+    static let defaultBehindGapSeconds = Thresholds.backfillContinuationBehindGapSeconds
 
     /// `stillConnected`: link up + command channel usable. `strapNewestTs`: newest record the strap holds
     /// (GET_DATA_RANGE). `ourFrontierTs`: newest record WE'VE persisted (max HR ts). `lastTrimAdvanced`:
@@ -252,8 +256,8 @@ struct BackfillContinuation {
                                    rowsPersistedThisSession: Int = 0,
                                    lastTrimAdvanced: Bool,
                                    consecutiveCount: Int,
-                                   maxAutoContinues: Int = defaultMaxAutoContinues,
-                                   behindGapSeconds: Int = defaultBehindGapSeconds) -> Bool {
+                                   maxAutoContinues: Int = Thresholds.backfillContinuationMaxAutoContinues,
+                                   behindGapSeconds: Int = Thresholds.backfillContinuationBehindGapSeconds) -> Bool {
         guard stillConnected else { return false }                 // 1
         guard consecutiveCount < maxAutoContinues else { return false }   // 4 (cap)
         guard lastTrimAdvanced else { return false }               // 3 (don't spin on a frozen cursor)
@@ -347,18 +351,24 @@ public final class BLEManager: NSObject, ObservableObject {
     private var backfillTimer: DispatchSourceTimer?
     // The timer fires this often, but BackfillPolicy.periodicFloorSeconds is the real floor (a recent
     // event-triggered sync defers the next periodic tick). 900s = 15 min, matching WHOOP.
-    static let backfillIntervalSeconds = 900
+    /// @deprecated Use Thresholds.backfillIntervalSeconds
+    @available(*, deprecated, message: "Use Thresholds.backfillIntervalSeconds")
+    static let backfillIntervalSeconds = Thresholds.backfillIntervalSeconds
     /// Keep-alive: re-arm realtime, poll battery, and bounce a stalled link so streaming
     /// never silently dies. Started on bond, cancelled on disconnect.
     private var keepAliveTimer: DispatchSourceTimer?
-    static let keepAliveIntervalSeconds = 30
+    /// @deprecated Use Thresholds.keepAliveIntervalSeconds
+    @available(*, deprecated, message: "Use Thresholds.keepAliveIntervalSeconds")
+    static let keepAliveIntervalSeconds = Thresholds.keepAliveIntervalSeconds
     private var keepAliveTick = 0
     /// If a persisted/missing strap-family preference points at the wrong service, a service-filtered
     /// BLE scan can run forever even though the strap is nearby (the common "won't reconnect after an
     /// update" report). Rotate between WHOOP families after a short miss and persist whichever family
     /// actually advertises. (PR#195)
     private var scanFallbackWorkItem: DispatchWorkItem?
-    static let scanFallbackDelaySeconds: TimeInterval = 8
+    /// @deprecated Use Thresholds.scanFallbackDelaySeconds
+    @available(*, deprecated, message: "Use Thresholds.scanFallbackDelaySeconds")
+    static let scanFallbackDelaySeconds = Thresholds.scanFallbackDelaySeconds
     /// Last time ANY notification arrived — drives the liveness watchdog.
     private var lastDataAt = Date()
     /// True while a Live/Health screen is on-screen and wants the realtime stream. One of the two
@@ -379,11 +389,17 @@ public final class BLEManager: NSObject, ObservableObject {
     private var realtimeArmed = false
     /// #80 marginal-radio fallback: tracks consecutive arm-then-quick-timeout cycles. When it trips,
     /// `standardHRFallback` goes true and the next connect skips arming R10/R11 (relies on 0x2A37).
-    private var marginalRadio = MarginalRadioDetector()
+    private var marginalRadio = MarginalRadioDetector(
+        tripThreshold: Thresholds.marginalRadioTripThreshold,
+        quickTimeoutWindow: Thresholds.marginalRadioQuickTimeoutWindow
+    )
     /// #617 bond-loop detector: tracks consecutive bond-then-quick-timeout cycles on a WHOOP 4. When it
     /// trips, BLEManager surfaces the existing re-pair guide (`state.reconnectGuide`) instead of looping
     /// silently. Reset on a clean session / intentional disconnect / a successful connect.
-    private var postBondLoop = PostBondTimeoutLoopDetector()
+    private var postBondLoop = PostBondTimeoutLoopDetector(
+        tripThreshold: Thresholds.postBondLoopTripThreshold,
+        quickTimeoutWindow: Thresholds.postBondLoopQuickTimeoutWindow
+    )
     /// Wall time the encrypted bond was established this connection, to measure how soon a drop follows
     /// the bond (the #617 bond-loop tell). nil until bonded; cleared on disconnect.
     private var bondedAt: Date?
@@ -395,11 +411,11 @@ public final class BLEManager: NSObject, ObservableObject {
     private var connectGeneration = 0
     /// #126 false-alarm guard: tracks CONSECUTIVE console-only completed syncs so the "clock has lost
     /// sync" banner only fires on sustained emptiness, not a single transient empty cycle on a healthy strap.
-    private var emptySyncTracker = EmptySyncTracker()
+    private var emptySyncTracker = EmptySyncTracker(threshold: Thresholds.emptySyncTrackerThreshold)
     /// #580: tracks CONSECUTIVE empty 5/MG offloads so a 5/MG whose firmware serves no history offload (but
     /// streams live HR fine) reads as "history sync experimental on 5.0" instead of a sync error, and the
     /// 120s bounce loop backs off while live HR is flowing. Reset on connect / a banking offload.
-    private var whoop5EmptyOffload = Whoop5EmptyOffloadTracker()
+    private var whoop5EmptyOffload = Whoop5EmptyOffloadTracker(quietThreshold: Thresholds.whoop5EmptyOffloadQuietThreshold)
     /// When true, SKIP arming the R10/R11 raw realtime stream on connect — the radio couldn't sustain
     /// it (see MarginalRadioDetector). Live HR then comes only from the already-subscribed low-bandwidth
     /// 0x2A37 standard-HR profile. Per-session: set by the detector, cleared on a clean reconnect (a
@@ -1419,7 +1435,7 @@ public final class BLEManager: NSObject, ObservableObject {
                 // EXCEPTION: if we stopped because the per-connection CAP is hit, leave the streak at/over
                 // the cap so it STAYS engaged for the rest of this connection (the 15-min floor takes over);
                 // zeroing it here would immediately re-arm the cap and let a runaway strap spin again.
-                if count < BackfillContinuation.defaultMaxAutoContinues {
+                if count < Thresholds.backfillContinuationMaxAutoContinues {
                     consecutiveAutoContinues = 0
                 }
                 return
@@ -1429,7 +1445,7 @@ public final class BLEManager: NSObject, ObservableObject {
             // log/counter churn if so.
             guard !backfilling else { return }
             consecutiveAutoContinues += 1
-            log("Backfill: auto-continuing (#364/#451) — the trim advanced and the strap is still handing over real records (frontier \(frontier.map(String.init) ?? "?"), strap-reported newest \(newest.map(String.init) ?? "?")); re-kicking offload \(consecutiveAutoContinues)/\(BackfillContinuation.defaultMaxAutoContinues) without waiting the 15-min floor.")
+            log("Backfill: auto-continuing (#364/#451) — the trim advanced and the strap is still handing over real records (frontier \(frontier.map(String.init) ?? "?")), strap-reported newest \(newest.map(String.init) ?? "?")), re-kicking offload \(consecutiveAutoContinues)/\(Thresholds.backfillContinuationMaxAutoContinues) without waiting the 15-min floor.")
             // .autoContinue bypasses the BackfillPolicy floor (the whole point — don't wait 15 min);
             // requestSync still re-checks connected/bonded/not-backfilling before kicking, and the
             // consecutive-cap above is the runaway guard.
@@ -1744,7 +1760,7 @@ public final class BLEManager: NSObject, ObservableObject {
 
     private func startKeepAlive() {
         keepAliveTimer?.cancel()
-        let s = BLEManager.keepAliveIntervalSeconds
+        let s = Thresholds.keepAliveIntervalSeconds
         let t = DispatchSource.makeTimerSource(queue: .main)
         t.schedule(deadline: .now() + .seconds(s), repeating: .seconds(s))
         t.setEventHandler { [weak self] in self?.keepAliveFire() }
@@ -1787,7 +1803,7 @@ public final class BLEManager: NSObject, ObservableObject {
 
     private func startBackfillTimer() {
         backfillTimer?.cancel()
-        let interval = BLEManager.backfillIntervalSeconds
+        let interval = Thresholds.backfillIntervalSeconds
         let t = DispatchSource.makeTimerSource(queue: .main)
         t.schedule(deadline: .now() + .seconds(interval), repeating: .seconds(interval))
         t.setEventHandler { [weak self] in self?.triggerPeriodicBackfill() }
@@ -1838,8 +1854,10 @@ public final class BLEManager: NSObject, ObservableObject {
     }
 
     // MARK: Helpers
+    /// @deprecated Use Thresholds.logTimeFormat
+    @available(*, deprecated, message: "Use Thresholds.logTimeFormat")
     private static let logTimeFormatter: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f
+        let f = DateFormatter(); f.dateFormat = Thresholds.logTimeFormat; return f
     }()
 
     private func log(_ s: String) {
@@ -1900,7 +1918,7 @@ public final class BLEManager: NSObject, ObservableObject {
         }
         scanFallbackWorkItem = work
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + BLEManager.scanFallbackDelaySeconds,
+            deadline: .now() + Thresholds.scanFallbackDelaySeconds,
             execute: work
         )
     }

@@ -1,16 +1,65 @@
-# .github/workflows/macos-app.yml (new)
-name: macOS App Build & Test
+# macOS App Build & Test
+# Runs on PRs that touch the macOS app target (Strand/ sources, project.yml)
+# Complements the package-only packages-only swift-packages.yml which tests packages independently
+
+name: macOS App CI
+
 on:
   pull_request:
-    paths: ['Strand/**', 'project.yml']
+    branches: [main]
+    paths:
+      - 'Strand/**'
+      - 'project.yml'
+      - '.github/workflows/macos-app.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Strand/**'
+      - 'project.yml'
+      - '.github/workflows/macos-app.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: macos-app-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  build-and-test:
     runs-on: macos-15
+    timeout-minutes: 30
+    
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed for xcodegen to work properly
+      
       - name: Install XcodeGen
         run: brew install xcodegen
-      - name: Generate Xcode project
+      
+      - name: Generate Xcode Project
         run: xcodegen generate
-      - name: Build & Test
-        run: xcodebuild test -scheme Strand -destination 'platform=macOS'
+        working-directory: .
+      
+      - name: Verify project generated
+        run: |
+          test -f Strand.xcodeproj/project.pbxproj
+          echo "Project generated successfully"
+      
+      - name: Build and Test (macOS)
+        run: |
+          xcodebuild \
+            -scheme Strand \
+            -destination 'platform=macOS' \
+            -configuration Debug \
+            build test \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty || exit ${PIPESTATUS[0]}
+      
+      - name: Upload test results (if any failures)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-test-logs
+          path: ~/Library/Logs/DiagnosticReports/
+          retention-days: 7

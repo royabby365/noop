@@ -18,7 +18,10 @@ enum BackfillTrigger {
 /// Pure rate-limiter for historical-offload kicks. No BLE/store deps. Floors match WHOOP
 /// (observed: ~15-min periodic + expedited event syncs).
 enum BackfillPolicy {
-    static let periodicFloorSeconds: TimeInterval = 900   // 15 min
+    /// @deprecated Use Thresholds.backfillPeriodicFloorSeconds
+    @available(*, deprecated, message: "Use Thresholds.backfillPeriodicFloorSeconds")
+    static let periodicFloorSeconds: TimeInterval = Thresholds.backfillPeriodicFloorSeconds
+    /// @deprecated Use Thresholds (eventFloorSeconds not yet in Thresholds, keep for now)
     static let eventFloorSeconds: TimeInterval = 90       // absorbs reconnect-flaps / event bursts
     static let emptyBackoffThreshold = 3                  // empties before the floor starts stretching
     static let maxEmptyBackoff: Double = 4                // cap → ~6-min event / 1-hr periodic floor
