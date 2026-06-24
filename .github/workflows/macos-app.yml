@@ -1,0 +1,16 @@
+# .github/workflows/macos-app.yml (new)
+name: macOS App Build & Test
+on:
+  pull_request:
+    paths: ['Strand/**', 'project.yml']
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build & Test
+        run: xcodebuild test -scheme Strand -destination 'platform=macOS'
