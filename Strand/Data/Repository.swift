@@ -193,7 +193,9 @@ final class Repository: ObservableObject {
     static func localDayKey(_ date: Date) -> String { dayKeyFormatter.string(from: date) }
 
     /// The hour the LOGICAL day rolls (04:00 local). Between midnight and this hour, "Today" stays put.
-    nonisolated static let logicalDayRolloverHour = 4
+    /// @deprecated Use Thresholds.logicalDayRolloverHour
+    @available(*, deprecated, message: "Use Thresholds.logicalDayRolloverHour")
+    nonisolated static let logicalDayRolloverHour = Thresholds.logicalDayRolloverHour
 
     /// The LOGICAL local day for `now` — the calendar date of `now - rolloverHour hours`. Rolls at
     /// 04:00 local rather than midnight, so the small hours after midnight still resolve to the prior
@@ -201,12 +203,12 @@ final class Repository: ObservableObject {
     /// boundary is testable (23:59 → same day, 01:00 → previous day, 04:01 → new day). Presentation-only:
     /// used solely to pick which stored row is Today and to anchor the Today HR-trend window start; stored
     /// row keys are never rewritten.
-    static func logicalDay(_ now: Date, rolloverHour: Int = logicalDayRolloverHour) -> Date {
+    static func logicalDay(_ now: Date, rolloverHour: Int = Thresholds.logicalDayRolloverHour) -> Date {
         now.addingTimeInterval(-Double(rolloverHour) * 3_600)
     }
 
     /// `yyyy-MM-dd` key for the logical day of `now` (see `logicalDay`).
-    static func logicalDayKey(_ now: Date, rolloverHour: Int = logicalDayRolloverHour) -> String {
+    static func logicalDayKey(_ now: Date, rolloverHour: Int = Thresholds.logicalDayRolloverHour) -> String {
         localDayKey(logicalDay(now, rolloverHour: rolloverHour))
     }
 
@@ -214,7 +216,7 @@ final class Repository: ObservableObject {
     /// for the Today HR-trend window so it spans from the logical day's 00:00 rather than restarting at the
     /// new calendar midnight while we're still showing yesterday's logical day in the small hours (#144).
     static func logicalDayStart(_ now: Date, calendar: Calendar = .current,
-                                rolloverHour: Int = logicalDayRolloverHour) -> Date {
+                                rolloverHour: Int = Thresholds.logicalDayRolloverHour) -> Date {
         calendar.startOfDay(for: logicalDay(now, rolloverHour: rolloverHour))
     }
 
@@ -285,7 +287,7 @@ final class Repository: ObservableObject {
     /// @Published (pure ordering, never drives the UI); race-free since Repository is @MainActor.
     private var refreshGen = 0
 
-    func refresh(days nDays: Int = 4000) async {
+    func refresh(days nDays: Int = Thresholds.maxHistoryDaysForRescore) async {
         guard let store = await ensureStore() else { return }
         refreshGen &+= 1
         let myGen = refreshGen
@@ -298,8 +300,8 @@ final class Repository: ObservableObject {
         let imported = (try? await store.dailyMetrics(deviceId: deviceId, from: fromDay, to: toDay)) ?? []
         let computed = (try? await store.dailyMetrics(deviceId: computedDeviceId, from: fromDay, to: toDay)) ?? []
         let apple = (try? await store.dailyMetrics(deviceId: Self.appleHealthSource, from: fromDay, to: toDay)) ?? []
-        let impSleep = (try? await store.sleepSessions(deviceId: deviceId, from: lo, to: hi, limit: 4000)) ?? []
-        let compSleep = (try? await store.sleepSessions(deviceId: computedDeviceId, from: lo, to: hi, limit: 4000)) ?? []
+        let impSleep = (try? await store.sleepSessions(deviceId: deviceId, from: lo, to: hi, limit: Thresholds.maxSleepSessionsPerQuery)) ?? []
+        let compSleep = (try? await store.sleepSessions(deviceId: computedDeviceId, from: lo, to: hi, limit: Thresholds.maxSleepSessionsPerQuery)) ?? []
 
         // Export-verbatim sleep figures (long-format metricSeries rows from WhoopImporter).
         // SleepView prefers these per day over its APPROXIMATE recomputations.
@@ -491,12 +493,12 @@ final class Repository: ObservableObject {
     /// hiding the day's extra blocks. Imported blocks still win on any day they cover (matching
     /// the dashboard's imported-wins merge); computed blocks fill days with no import.
     /// Oldest→newest by onset.
-    func allSleepSessions(days: Int = 4000) async -> [CachedSleepSession] {
+    func allSleepSessions(days: Int = Thresholds.maxHistoryDaysForRescore) async -> [CachedSleepSession] {
         guard let store = await ensureStore() else { return [] }
         let now = Int(Date().timeIntervalSince1970)
         let lo = now - days * 86_400, hi = now + 86_400
-        let imported = (try? await store.sleepSessions(deviceId: deviceId, from: lo, to: hi, limit: 4000)) ?? []
-        let computed = (try? await store.sleepSessions(deviceId: computedDeviceId, from: lo, to: hi, limit: 4000)) ?? []
+        let imported = (try? await store.sleepSessions(deviceId: deviceId, from: lo, to: hi, limit: Thresholds.maxSleepSessionsPerQuery)) ?? []
+        let computed = (try? await store.sleepSessions(deviceId: computedDeviceId, from: lo, to: hi, limit: Thresholds.maxSleepSessionsPerQuery)) ?? []
         let cal = Calendar.current
         func endDay(_ s: CachedSleepSession) -> Date {
             cal.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(s.endTs)))
@@ -535,12 +537,12 @@ final class Repository: ObservableObject {
     /// shift/late sleeper, not just at cold-start. Reads a wide window so the distinct-day count comfortably
     /// clears the threshold; `habitualMidsleepSec` keeps the longest block per day, so window/order/source
     /// merge differences wash out. (#547)
-    func habitualMidsleepSec(days: Int = 4000) async -> Int? {
+    func habitualMidsleepSec(days: Int = Thresholds.maxHistoryDaysForRescore) async -> Int? {
         guard let store = await ensureStore() else { return nil }
         let now = Int(Date().timeIntervalSince1970)
         let lo = now - days * 86_400, hi = now + 86_400
-        let imported = (try? await store.sleepSessions(deviceId: deviceId, from: lo, to: hi, limit: 4000)) ?? []
-        let computed = (try? await store.sleepSessions(deviceId: computedDeviceId, from: lo, to: hi, limit: 4000)) ?? []
+        let imported = (try? await store.sleepSessions(deviceId: deviceId, from: lo, to: hi, limit: Thresholds.maxSleepSessionsPerQuery)) ?? []
+        let computed = (try? await store.sleepSessions(deviceId: computedDeviceId, from: lo, to: hi, limit: Thresholds.maxSleepSessionsPerQuery)) ?? []
         let offsetSec = TimeZone.current.secondsFromGMT()
         let blocks = (imported + computed).compactMap { s -> SleepStageTotals.HistoryBlock? in
             let start = s.effectiveStartTs, end = s.endTs
@@ -746,7 +748,7 @@ final class Repository: ObservableObject {
     // MARK: - Metric explorer reads (generic substrate)
 
     /// Daily series for any metric key from a given source ("my-whoop" / "apple-health").
-    func series(key: String, source: String, days: Int = 4000) async -> [(day: String, value: Double)] {
+    func series(key: String, source: String, days: Int = Thresholds.maxHistoryDaysForRescore) async -> [(day: String, value: Double)] {
         guard let store = await ensureStore() else { return [] }
         let now = Date()
         let from = Self.dayString(now.addingTimeInterval(-Double(days) * 86_400))
@@ -905,7 +907,7 @@ final class Repository: ObservableObject {
     /// on surfaces where the user expects the best available signal (Compare/Insights/Stress/Explore/
     /// Today); use `series(key:source:)` where a single source must be honoured verbatim. Precedence is
     /// explicit per `sourceCandidates`: imported WHOOP > NOOP-computed > declared-compatible Apple Health.
-    func resolvedSeries(key: String, source preferredSource: String, days: Int = 4000) async -> MetricSeriesResolution {
+    func resolvedSeries(key: String, source preferredSource: String, days: Int = Thresholds.maxHistoryDaysForRescore) async -> MetricSeriesResolution {
         let candidates = Self.sourceCandidates(forKey: key, preferredSource: preferredSource,
                                                actualWhoopSource: deviceId)
         guard let store = await ensureStore() else {
@@ -1030,7 +1032,7 @@ final class Repository: ObservableObject {
     ///     column — the same key→column map InsightsView.dailyOutcome / Android's dailyPick use,
     ///     extended to the full daily column set.
     /// Any OTHER source (apple-health / nutrition-csv / noop-mood) reads only its own series, unchanged.
-    func exploreSeries(key: String, source: String, days: Int = 4000) async -> [(day: String, value: Double)] {
+    func exploreSeries(key: String, source: String, days: Int = Thresholds.maxHistoryDaysForRescore) async -> [(day: String, value: Double)] {
         guard source == "my-whoop" else { return await series(key: key, source: source, days: days) }
         guard let store = await ensureStore() else { return [] }
         let now = Date()
@@ -1110,7 +1112,7 @@ final class Repository: ObservableObject {
     static let journalDeviceId = "noop-journal"
 
     /// Logged behaviours (imported WHOOP journal ∪ native noop-journal) for correlation insights.
-    func journalEntries(days: Int = 4000) async -> [JournalEntry] {
+    func journalEntries(days: Int = Thresholds.maxHistoryDaysForRescore) async -> [JournalEntry] {
         guard let store = await ensureStore() else { return [] }
         let now = Date()
         let from = Self.dayString(now.addingTimeInterval(-Double(days) * 86_400))
@@ -1123,7 +1125,7 @@ final class Repository: ObservableObject {
 
     /// Imported journal rows only (used by the logging card to adopt the export's exact question
     /// strings into the catalog, so logged and imported days group under one behaviour).
-    func importedJournalEntries(days: Int = 4000) async -> [JournalEntry] {
+    func importedJournalEntries(days: Int = Thresholds.maxHistoryDaysForRescore) async -> [JournalEntry] {
         guard let store = await ensureStore() else { return [] }
         let now = Date()
         return (try? await store.journalEntries(

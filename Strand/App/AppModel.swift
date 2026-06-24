@@ -27,8 +27,10 @@ final class AppModel: ObservableObject {
     /// Timestamp formatter for the generic-HR strap-log lines routed through `straplog` into the shared
     /// log (issue #421). Mirrors `BLEManager.logTimeFormatter`'s `HH:mm:ss` so WHOOP and HR-strap lines
     /// read identically in the exported strap log.
+    /// @deprecated Use Thresholds.logTimeFormat
+    @available(*, deprecated, message: "Use Thresholds.logTimeFormat")
     static let logTimeFormatter: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f
+        let f = DateFormatter(); f.dateFormat = Thresholds.logTimeFormat; return f
     }()
 
     /// Shared device id for both live capture (BLEManager) and imported history.

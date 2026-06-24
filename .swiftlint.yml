@@ -1,0 +1,117 @@
+# SwiftLint configuration for NOOP
+# Run: swiftlint lint --config .swiftlint.yml
+# Auto-correct: swiftlint autocorrect --config .swiftlint.yml
+
+# Include/exclude paths
+included:
+  - Strand
+  - Packages/WhoopProtocol/Sources
+  - Packages/WhoopStore/Sources
+  - Packages/StrandAnalytics/Sources
+  - Packages/StrandImport/Sources
+  - Packages/StrandDesign/Sources
+  - Packages/NoopLocalAccess/Sources
+
+excluded:
+  - .build
+  - Strand.xcodeproj
+  - StrandiOS
+  - StrandiOSWidgets
+  - StrandiOSShared
+  - android
+  - Tools
+  - Packages/*/Tests
+  - StrandTests
+
+# Disable rules by default, enable selectively
+disabled_rules:
+  - line_length
+  - function_body_length
+  - type_body_length
+  - file_length
+  - cyclomatic_complexity
+  - nesting
+  - identifier_name
+  - trailing_whitespace
+  - vertical_whitespace
+
+# Enable only high-signal rules
+opt_in_rules:
+  - force_unwrapping
+  - empty_count
+  - first_where
+  - redundant_nil_coalescing
+  - empty_string
+  - array_init
+  - explicit_init
+  - fatal_error_message
+  - overridden_super_call
+  - private_outlet
+  - prohibited_super_call
+  - quick_discouraged_call
+  - redundant_type_annotation
+  - sorted_imports
+  - unneeded_parentheses_in_closure_argument
+  - vertical_parameter_alignment_on_call
+  - xct_specific_matcher
+
+# Force unwrap: warn, don't error (many legitimate uses in this codebase)
+force_unwrapping: warning
+
+# Allow longer lines for URL strings and generated code
+line_length:
+  warning: 160
+  error: 200
+  ignores_comments: true
+  ignores_urls: true
+  ignores_function_declarations: true
+  ignores_interpolated_strings: true
+
+# Allow common patterns in this codebase
+type_name:
+  allowed_symbols: "_"
+
+variable_name:
+  allowed_symbols: "_"
+  min_length: 1
+
+function_parameter_count:
+  warning: 8
+  error: 12
+
+# Custom rules for NOOP patterns
+custom_rules:
+  # Discourage print() in production code (use NSLog or os_log)
+  print_statement:
+    name: "Print Statement"
+    regex: '\bprint\('
+    message: "Use NSLog or os_log instead of print() for production logging"
+    severity: warning
+    excluded:
+      - "Tests"
+      - "Demo"
+
+  # Discourage force try in production
+  force_try:
+    name: "Force Try"
+    regex: 'try!'
+    message: "Avoid force try; handle errors explicitly"
+    severity: warning
+
+  # Ensure @MainActor on ObservableObject
+  main_actor_observable:
+    name: "MainActor on ObservableObject"
+    regex: '(final class|class) \w+: ObservableObject'
+    match_kinds:
+      - type.declaration
+    message: "Consider adding @MainActor to ObservableObject classes"
+    severity: warning
+    excluded:
+      - "Packages/StrandDesign/Sources"
+
+  # Discourage raw Task { } without priority for heavy work
+  task_without_priority:
+    name: "Task without priority"
+    regex: 'Task\s*\{'
+    message: "Specify priority for heavy background work (e.g., .utility, .background)"
+    severity: warning
