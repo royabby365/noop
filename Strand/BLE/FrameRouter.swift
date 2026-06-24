@@ -1,5 +1,6 @@
 import Foundation
 import WhoopProtocol
+import StrandAnalytics
 
 /// Pure decode→state router. Takes a COMPLETE (already reassembled) frame, decodes it with
 /// WhoopProtocol.parseFrame, and updates LiveState. No CoreBluetooth — fully unit-testable.
@@ -14,7 +15,10 @@ public final class FrameRouter {
     /// WHOOP 5 custom frames currently surface only their envelope (live HR/battery come from the
     /// standard 0x2A37/0x2A19 profiles instead).
     var family: DeviceFamily = .whoop4
-
+    
+    /// Optional logger for R22/deep-data telemetry
+    var log: ((String) -> Void)?
+    
     public init(state: LiveState) {
         self.state = state
     }
@@ -50,6 +54,14 @@ public final class FrameRouter {
                 state.setRRIntervals(rr)
             }
 
+        case "HISTORICAL_DATA":
+            // WHOOP 5.0/MG historical biometric frames (type 47 / 0x2F) come through here
+            // The schema decode handles known layouts (v18, v20, v21, v26)
+            if family == .whoop5 {
+                // Log R22 telemetry for deep-data monitoring
+                log?("R22 historical frame: version=\(parsed.parsed[\"hist_version\"]?.intValue ?? -1), fields=\(parsed.fields.count)")
+            }
+
         case "COMMAND_RESPONSE":
             if let pct = parsed.parsed["battery_pct"]?.doubleValue {
                 state.setBattery(pct)
@@ -68,7 +80,7 @@ public final class FrameRouter {
                 }
             }
 
-        case "EVENT":
+case "EVENT":
             if let ev = parsed.parsed["event"]?.stringValue {
                 // #92: don't surface the live-HR stream toggle (BLE_REALTIME_HR_ON/OFF) in "Last
                 // Event" — it's internal plumbing that fires on every connect and just confuses
@@ -105,9 +117,15 @@ public final class FrameRouter {
                     // daily/foreground re-arm in AppModel, since this event isn't always observed.
                     state.onSmartAlarmFired?()
                 }
-            }
+}
 
         default:
+            // Check for WHOOP 5.0/MG R22 (type 0x2F) deep biometric packets
+            if family == .whoop5, parsed.typeName == "0x2F" || parsed.typeName == "HISTORICAL_DATA" {
+                // R22 deep-data frames come through as HISTORICAL_DATA (type 47) or raw 0x2F
+                // The schema decode handles known layouts; unknown layouts reach here
+                log?("R22 frame received: \(parsed.typeName), fields: \(parsed.fields.count)")
+            }
             break
         }
     }
