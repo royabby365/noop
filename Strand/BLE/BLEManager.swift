@@ -570,6 +570,7 @@ public final class BLEManager: NSObject, ObservableObject {
         self.state = state
         self.deviceId = deviceId
         self.router = FrameRouter(state: state)
+        self.router.log = { [weak self] msg in self?.log(msg) }
         // WhoopStore.init is now async, so it can't run here.
         // bootstrapStore() is called once the CBCentralManager reaches poweredOn
         // (see centralManagerDidUpdateState), which guarantees the store is ready
@@ -673,6 +674,7 @@ public final class BLEManager: NSObject, ObservableObject {
         self.state = state
         self.deviceId = deviceId
         self.router = FrameRouter(state: state)
+        self.router.log = { [weak self] msg in self?.log(msg) }
         self.collector = collector
         super.init()
         state.lastSyncedAt = UserDefaults.standard.object(forKey: "lastSyncedAt") as? Double
