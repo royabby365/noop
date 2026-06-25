@@ -42,11 +42,11 @@ jobs:
         working-directory: .
       
       - name: Build Android App
-        run: ./gradlew assembleDebug
+        run: ./gradlew assemble
         working-directory: android
       
       - name: Run Unit Tests
-        run: ./gradlew testDebugUnitTest
+        run: ./gradlew test
         working-directory: android
       
       - name: Upload test results
