@@ -5,94 +5,134 @@ import WhoopProtocol
 import StrandAnalytics
 import StrandDesign
 
-// MARK: - Supporting Data Types
-struct ImportedSleepFigures: Equatable {
-    var performancePct: Double?
-    var consistencyPct: Double?
-    var needMin: Double?
-    var debtMin: Double?
+// MARK: - Core Support Models
+public struct ImportedSleepFigures: Equatable {
+    public var performancePct: Double?   // "sleep_performance", 0–100
+    public var consistencyPct: Double?   // "sleep_consistency", 0–100
+    public var needMin: Double?          // "sleep_need_min", minutes
+    public var debtMin: Double?          // "sleep_debt_min", minutes
+    public init() {}
 }
 
-struct ResolvedMetricPoint: Equatable, Sendable {
-    let day: String; let value: Double; let source: String; let sourceKey: String
+public struct ResolvedMetricPoint: Equatable, Sendable {
+    public let day: String
+    public let value: Double
+    public let source: String
+    public let sourceKey: String
 }
 
-struct MetricSourceCandidate: Equatable, Hashable, Sendable {
-    let source: String; let key: String
+public struct MetricSourceCandidate: Equatable, Hashable, Sendable {
+    public let source: String
+    public let key: String
 }
 
-struct MetricSeriesResolution: Equatable, Sendable {
-    let requestedSource: String
-    let candidates: [MetricSourceCandidate]
-    let points: [ResolvedMetricPoint]
+public struct MetricSeriesResolution: Equatable, Sendable {
+    public let requestedSource: String
+    public let candidates: [MetricSourceCandidate]
+    public let points: [ResolvedMetricPoint]
 }
 
-struct SourcedDailyMetric: Equatable {
-    let metric: DailyMetric
-    let source: DailyMetricSource
+public enum DailyMetricSource: Equatable {
+    case whoopImport
+    case noopComputed
+    case appleHealth
+    case localCache
 }
 
-enum DailyMetricSource: Equatable {
-    case whoopImport, noopComputed, appleHealth, localCache
+public struct SourcedDailyMetric: Equatable {
+    public let metric: DailyMetric
+    public let source: DailyMetricSource
 }
 
-// MARK: - Logic Engine (Non-Isolated)
-/// Pure, stateless algorithms. This is thread-safe and unit-testable.
-struct RepositoryLogic {
-    static func resolveToday(days: [DailyMetric], logicalKey: String, localKey: String) -> DailyMetric? {
-        if localKey != logicalKey,
-           let localRow = days.last(where: { $0.day == localKey && $0.totalSleepMin != nil }) {
-            return localRow
-        }
-        return days.last(where: { $0.day == logicalKey })
-    }
-    
-    // Add your original mergeDaily, mergeSleep, sourceRows, and computeFreshness implementations here.
-    // They are now pure functions taking inputs and returning outputs.
-}
-
-// MARK: - Database Service (Thread-Safe Actor)
-actor RepositoryStore {
-    private var store: WhoopStore?
-    private let deviceId: String
-    private var computedDeviceId: String { deviceId + "-noop" }
-
-    init(deviceId: String) { self.deviceId = deviceId }
-
-    func ensureStore() throws -> WhoopStore {
-        if let store = store { return store }
-        let path = try StorePaths.defaultDatabasePath()
-        let s = try WhoopStore(path: path)
-        try s.upsertDevice(id: deviceId, mac: nil, name: "WHOOP")
-        self.store = s
-        return s
-    }
-    
-    func checkpointWAL() async throws {
-        try await store?.checkpointWAL()
-    }
-}
-
-// MARK: - Repository (MainActor Wrapper)
+// MARK: - Main Actor Read Model Wrapper
 @MainActor
-final class Repository: ObservableObject {
+public final class Repository: ObservableObject {
     private let store: RepositoryStore
     
-    @Published var days: [DailyMetric] = []
-    @Published var sleeps: [CachedSleepSession] = []
-    @Published var importedSleep: [String: ImportedSleepFigures] = [:]
-    @Published var loaded = false
-    @Published private(set) var freshness: RepositoryFreshness = .empty
-    @Published private(set) var vitalRows: [SourcedDailyMetric] = []
-    @Published private(set) var refreshSeq = 0
+    @Published public var days: [DailyMetric] = []
+    @Published public var sleeps: [CachedSleepSession] = []
+    @Published public var importedSleep: [String: ImportedSleepFigures] = [:]
+    @Published public var loaded = false
+    @Published public private(set) var freshness: RepositoryFreshness = .empty
+    @Published public private(set) var vitalRows: [SourcedDailyMetric] = []
+    @Published public private(set) var refreshSeq = 0
     
     private var refreshGen = 0
-    let deviceId: String
+    public let deviceId: String
 
-    // FIX: Use nonisolated to allow access from any thread
-    nonisolated static let appleHealthSource = "apple-health"
-    static let whoopSource = "my-whoop"
-    static let healthConnectSource = "health-connect"
+    nonisolated public static let appleHealthSource = "apple-health"
+    public static let whoopSource = "my-whoop"
+    public static let healthConnectSource = "health-connect"
 
-    init(deviceId: String) {
-        self.deviceId = device
+    public init(deviceId: String) {
+        self.deviceId = deviceId
+        self.store = RepositoryStore(deviceId: deviceId)
+    }
+
+    public var today: DailyMetric? {
+        let now = Date()
+        return RepositoryLogic.resolveToday(
+            days: days,
+            logicalKey: Repository.logicalDayKey(now),
+            localKey: Repository.localDayKey(now)
+        )
+    }
+
+    public var week: [DailyMetric] {
+        let cutoff = Repository.localDayKey(Calendar.current.date(byAdding: .day, value: -6, to: Date()) ?? Date())
+        return days.filter { $0.day >= cutoff }
+    }
+
+    public func refresh(days nDays: Int = Thresholds.maxHistoryDaysForRescore) async {
+        refreshGen &+= 1
+        let myGen = refreshGen
+        
+        let now = Date()
+        let fromDay = Self.dayString(now.addingTimeInterval(-Double(nDays) * 86_400))
+        let toDay = Self.dayString(now.addingTimeInterval(86_400))
+        
+        do {
+            let (imported, computed, apple, impSleep, compSleep) = try await store.fetchMetricsAndCaches(from: fromDay, to: toDay)
+            
+            let results = await Task.detached(priority: .userInitiated) {
+                let userEdited = RepositoryLogic.userEditedDays(compSleep)
+                return (
+                    mergedDays: RepositoryLogic.mergeDaily(imported: imported, computed: computed, userEditedDays: userEdited),
+                    mergedSleeps: RepositoryLogic.mergeSleep(imported: impSleep, computed: compSleep),
+                    sourced: RepositoryLogic.sourceRows(imported: imported, computed: computed, apple: apple),
+                    fresh: RepositoryLogic.computeFreshness(imported: imported, computed: computed, apple: apple, importedSleeps: impSleep, computedSleeps: compSleep)
+                )
+            }.value
+
+            guard myGen == refreshGen else { return }
+            
+            self.days = results.mergedDays
+            self.sleeps = results.mergedSleeps
+            self.vitalRows = results.sourced
+            self.freshness = results.fresh
+            self.refreshSeq += 1
+            self.loaded = true
+            
+        } catch {
+            NSLog("Repository refresh failed: \(error)")
+        }
+    }
+
+    // MARK: - Global Structural Date Engines
+    private static let dayKeyFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX"); return f
+    }()
+    
+    public static func localDayKey(_ date: Date) -> String { dayKeyFormatter.string(from: date) }
+    public static func dayString(_ date: Date) -> String { dayKeyFormatter.string(from: date) }
+    
+    public static func logicalDayKey(_ now: Date) -> String {
+        localDayKey(now.addingTimeInterval(-Double(Thresholds.logicalDayRolloverHour) * 3_600))
+    }
+
+    public func storeHandle() async -> WhoopStore? { try? await store.ensureStore() }
+    public func checkpointForBackup() async -> Bool { 
+        _ = try? await store.checkpointWAL()
+        return true 
+    }
+}
