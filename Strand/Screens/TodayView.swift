@@ -42,6 +42,21 @@ struct TodayView: View {
     // leaf subviews that each own their OWN `@EnvironmentObject live`, so a 1 Hz tick only re-renders those
     // dots/rows, never the rest of the dashboard. The memoized derivations below already absorbed the
     // EXPENSIVE recomputes; this removes the cheap-but-constant view-tree re-evaluation flood on top.
+    //
+    // #755 FIX-3 (DEFERRED — note only, not done): a `repo.refreshSeq` bump still re-evaluates the WHOLE
+    // Today `body` (TodayView observes `repo` via @EnvironmentObject, and every section reads it). #755's
+    // fixes 1+2 cut the bump FREQUENCY hard (a multi-chunk backfill now coalesces to a handful of refreshes,
+    // and the Repository diff-guard already drops no-op bumps), so the per-bump full-body re-eval is no
+    // longer a STORM — that was the scroll-stutter root cause and it is addressed. A true fix-3 (stop a
+    // single bump re-evaluating the full body) would mean extracting each section — heroSection,
+    // heartRateTrendSection, the Key-Metrics grid, yourCardsSection, workoutsSection, sourcesSection — into
+    // its own leaf view that reads ONLY the @State snapshot loadAll commits (sparks / restScore / hrPoints /
+    // workouts / provenanceByMetric / the your-cards values) plus the specific `repo`-derived values it
+    // needs (displayDay, selectedDayKey, repo.today) passed in as plain values, so the parent no longer
+    // re-renders them on every `repo` change — exactly the leaf-isolation pattern used for LiveState above,
+    // but for `repo`. That touches 10+ sections and dozens of `repo.*` references; doing it minimally is not
+    // possible without risking the reactivity regressions #755 warns about (a 7.0.3-class subtle break that
+    // passes clean tests), so it is left as a follow-up rather than rushed in alongside the load-path fix.
     @EnvironmentObject var profile: ProfileStore
     @EnvironmentObject var router: NavRouter
     /// The "update ringer" — the bell in the top bar opens this inbox; dismissed Today cards post into it.
@@ -83,6 +98,18 @@ struct TodayView: View {
         DashboardCardPrefs.decodeEnabled(dashboardCardsRaw)
             .filter { hydrationEnabled || $0 != .hydration }
     }
+
+    // #755: a mirror of `LiveState.backfilling` (strap mid history-offload). TodayView must NOT observe
+    // LiveState directly (the 1 Hz flood — see the top-of-type note), so a tiny leaf `BackfillFlagBridge`
+    // owns the observation and pushes only the boolean EDGE into this @State. loadAll reads it to DEFER the
+    // heavy history-wide reads while the offload's bulk writes are in flight, and the off→false edge re-runs
+    // the deferred set immediately (belt-and-braces alongside the coalesced refreshSeq bump). A bare boolean
+    // that flips ~twice per offload, so it costs nothing like the per-tick chunk count would.
+    @State private var liveBackfillingFlag = false
+    // #755: have the history-wide reads ever populated this session? Used so the FIRST load always runs them
+    // (even mid-offload, so a cold launch during a sync is never a blank dashboard), while later re-loads can
+    // safely defer them during an active backfill.
+    @State private var loadedHistoryWideOnce = false
 
     // 14-day sparkline series, keyed by metric key. Loaded once in .task.
     @State private var sparks: [String: [Double]] = [:]
@@ -367,6 +394,80 @@ struct TodayView: View {
         case "Apple Health": return StrandPalette.metricCyan
         default:            return StrandPalette.statusPositive
         }
+    }
+
+    // MARK: Apple Watch provenance (M1): "the watch is the sensor, NOOP is the brain"
+
+    /// True when the selected day's value for `metricKey` was supplied by the Apple-Health source (a
+    /// watch-only user's Charge/Rest). The store source stays `apple-health` so the engines and the
+    /// multi-source resolver are unchanged; the friendlier "Apple Watch" label + its confidence are a
+    /// Today-only presentation layer over that source. We don't touch the cross-lane
+    /// `provenanceDisplayLabel` (it's Kotlin-mirrored and feeds the Data Sources footer's "Apple Health").
+    private func isWatchSourced(_ metricKey: String) -> Bool {
+        Self.isWatchSource(provenanceByMetric[metricKey], appleHealthSource: Repository.appleHealthSource)
+    }
+
+    /// PURE (unit-testable) — whether a resolved raw source id is the Apple-Health/watch source. Kept
+    /// separate from the cross-lane `provenanceDisplayLabel` so the Today-only "Apple Watch" relabel never
+    /// leaks into the Kotlin-mirrored footer mapping.
+    static func isWatchSource(_ rawSource: String?, appleHealthSource: String) -> Bool {
+        rawSource == appleHealthSource
+    }
+
+    /// PURE (unit-testable) — the Today chip label for a resolved source, relabelling the Apple-Health
+    /// source as "Apple Watch" (the device the audience knows) and otherwise deferring to the shared
+    /// provenance label so Whoop / on-device read identically to the footer.
+    static func todayProvenanceChipLabel(rawSource: String, deviceId: String, appleHealthSource: String) -> String {
+        if rawSource == appleHealthSource { return "Apple Watch" }
+        return provenanceDisplayLabel(rawSource: rawSource, deviceId: deviceId)
+    }
+
+    /// True for a watch-context user with no strap supplying scores (Apple-Health days present and no WHOOP
+    /// recovery banked anywhere). Used for the calibrating case, where there's no value yet so the resolver
+    /// returns no winning source for `provenanceByMetric` — `isWatchSourced` can only fire once a number
+    /// lands. Robust watch-only detection is the onboarding lane's job; this is the minimal Today-side gate
+    /// so the "Needs more data" affordance shows for the obvious watch-only case without claiming a strap.
+    private var isWatchOnlyContext: Bool {
+        !appleDays.isEmpty && !repo.days.contains { $0.recovery != nil }
+    }
+
+    /// The Today chip label for a watch-sourced score: the audience knows the device, not the framework,
+    /// so a watch-derived number reads "Apple Watch" rather than the generic "Apple Health" the footer uses.
+    /// Delegates to the pure `todayProvenanceChipLabel` so the relabel logic is unit-tested.
+    private func watchProvenanceLabel(_ metricKey: String) -> String {
+        let raw = provenanceByMetric[metricKey] ?? Repository.appleHealthSource
+        return Self.todayProvenanceChipLabel(rawSource: raw, deviceId: repo.deviceId,
+                                             appleHealthSource: Repository.appleHealthSource)
+    }
+
+    /// The watch chip's confidence tier for the selected day, bound to the SAME `ScoreState` affordance the
+    /// rest of the app uses (`ScoreStatePill`'s dot+label). Charge rides the HRV baseline exactly like the
+    /// strap path — `.calibrating` until ~a week of nights, then `.building`, then `.solid` once trusted —
+    /// so an honest watch week reads differently from a thin one, never a blind number. Rest follows whether
+    /// the night actually has a score; any other key falls back to `.building`.
+    private func watchScoreState(_ metricKey: String) -> ScoreState {
+        let conf: ScoreConfidence
+        switch metricKey {
+        case "recovery":
+            // Same HRV-baseline gate the Charge engine uses, fed by the loaded nightly SDNN history.
+            let hrvBase = Baselines.foldHistory(repo.days.map(\.avgHrv), cfg: Baselines.hrvCfg)
+            conf = ScoreConfidence.charge(recovery: displayDay?.recovery, hrvBaseline: hrvBase)
+        case "sleep_performance":
+            // A watch night with a Rest score reads as built; without one it's still calibrating.
+            conf = restScore != nil ? .building : .calibrating
+        default:
+            conf = .building
+        }
+        return InsightsHubView.scoreState(conf)
+    }
+
+    /// Whether a watch-context score is still calibrating for the selected day, so the chip area shows an
+    /// honest "Needs more data" rather than a bare dash/number. Only meaningful on today (a past day with no
+    /// value is missing data, not mid-calibration), mirroring `recoveryCalibration`'s today-only gate, and
+    /// only when the value itself is absent (a scored watch day shows its "Apple Watch" chip + confidence).
+    private func watchNeedsMoreData(_ metricKey: String) -> Bool {
+        guard selectedDayOffset == 0, isWatchOnlyContext, !ringHasValue(metricKey) else { return false }
+        return watchScoreState(metricKey) == .calibrating
     }
 
     /// Parses a stored `yyyy-MM-dd` day key in the device-local zone (matching how DailyMetric.day
@@ -769,10 +870,23 @@ struct TodayView: View {
                 #endif
                 sourcesSection
             }
+            // #755: mirror `LiveState.backfilling` into `liveBackfillingFlag` WITHOUT TodayView observing
+            // LiveState (which would re-flood `body` ~1 Hz — see the top-of-type note). The bridge is a
+            // zero-size leaf in `.background` (no layout impact) that owns the observation and pushes only
+            // the boolean EDGE up. loadAll reads the flag to defer the heavy history-wide reads during an
+            // active offload; the off→false edge below re-runs them as a safety net to the coalesced refresh.
+            .background(BackfillFlagBridge(flag: $liveBackfillingFlag))
         }
         // Reload when the data refreshes OR the selected day changes — the HR trend and Rest score are
         // day-scoped, so navigating must re-fetch them for the newly selected window.
         .task(id: TodayLoadKey(seq: repo.refreshSeq, offset: selectedDayOffset)) { await loadAll() }
+        // #755: NO per-edge safety net here, on purpose. A deep offload segments into many slices that each
+        // flip `backfilling` false→true, so re-running the heavy history-wide reads on that edge would re-fire
+        // them dozens of times mid-offload and re-create the very write-contention this fix removes. The
+        // deferred reads land via the SINGLE coalesced trigger instead: AppModel's debounced `lastSyncedAt`
+        // sink fires one refresh ~2s after the offload quiesces, which bumps `refreshSeq` and re-fires the
+        // task above with `backfilling` now settled false (and a return-to-tab re-fires it too). If that final
+        // refresh diffs byte-identical, nothing new landed, so the already-shown history-wide data is correct.
         // Persist the freshly-built derivations so subsequent (1 Hz) renders with the same
         // inputs hit the cache instead of recomputing. Writing @State during `body` is not
         // allowed, so commit it after layout — the memoized accessors already return the
@@ -1754,9 +1868,24 @@ struct TodayView: View {
             .accessibilityLabel(Self.domainGuideAccessibilityLabel(domain))
             // Component 4 — the real per-day source under the ring (only when this score has a value for
             // the day AND we resolved its winner; a calibrating / empty ring shows no provenance badge).
-            if let key = provenanceKey, ringHasValue(key), let label = provenanceLabel(key) {
-                SourceBadge("\(label)", tint: provenanceTint(key))
-                    .accessibilityLabel("Source: \(label)")
+            // Apple Watch (M1): a watch-sourced score reads "Apple Watch" with its confidence bound to the
+            // shared ScoreStatePill dot/label, and a calibrating watch score shows "Needs more data" rather
+            // than a bare ring — the honest "the watch can't support this yet" state, never a fake number.
+            if let key = provenanceKey {
+                if ringHasValue(key), isWatchSourced(key) {
+                    VStack(spacing: 4) {
+                        SourceBadge("\(watchProvenanceLabel(key))", tint: StrandPalette.metricCyan)
+                        ScoreStatePill(watchScoreState(key))
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Source: Apple Watch")
+                } else if watchNeedsMoreData(key) {
+                    SourceBadge("Needs more data", tint: StrandPalette.textTertiary)
+                        .accessibilityLabel("Apple Watch. Needs more data to score this yet.")
+                } else if ringHasValue(key), let label = provenanceLabel(key) {
+                    SourceBadge("\(label)", tint: provenanceTint(key))
+                        .accessibilityLabel("Source: \(label)")
+                }
             }
         }
     }
@@ -2396,7 +2525,46 @@ struct TodayView: View {
 
     // MARK: - Loading
 
+    /// #755: the dashboard load is split into a DAY-SCOPED set (the selected day's HR window, Rest score,
+    /// sleep band, live Effort, provenance, axis — everything that must re-resolve when the user chevrons
+    /// to another day) and a HISTORY-WIDE set (the 10 sparklines, workouts, the cross-source bundles, the
+    /// "your cards" series — all independent of which day is selected). The day-scoped reads are a handful
+    /// of queries and ALWAYS run, so a day-switch or a tab-return repaints the screen immediately. The
+    /// history-wide reads are the bulk (~40 reads) and are DEFERRED while a multi-chunk backfill is actively
+    /// writing to the single-connection store (`live.backfilling`), because running them then both stutters
+    /// the screen and contends with the bulk writes. They are never permanently skipped: the coalesced
+    /// trailing refresh after the backfill quiesces (AppModel's debounced `lastSyncedAt` sink) bumps
+    /// `refreshSeq`, which re-fires this task with `live.backfilling` false, and the deferred set runs then.
+    /// Values + provenance are byte-identical to the old single-pass `loadAll` whenever each part runs.
     private func loadAll() async {
+        // Always refresh the selected day — cheap, and it's what a day-switch / return-to-tab needs.
+        // When the one-shot auto-land fires it changes `selectedDayOffset`, which re-fires this whole task
+        // for the landed day; bail here exactly as the old single-pass `loadAll` did on that `return` (skip
+        // the history-wide set + the new-day announce — the re-fired pass does both for the real day).
+        let autoLanded = await loadDayScoped()
+        guard !autoLanded else { return }
+        // Defer the heavy history-wide reads ONLY on a re-load while a backfill is actively writing, so they
+        // don't contend with the offload's bulk writes on the single-connection store. But ALWAYS run them on
+        // the FIRST load (even mid-offload): otherwise a cold launch during a sync would show a blank
+        // dashboard (no sparklines / workouts / your-cards) until the offload ends (#755). Loading on the
+        // first pass also makes the mount-during-sync flag race harmless: with no data yet we load regardless
+        // of the flag. The deferred set is guaranteed to run later via the coalesced refresh (see .task note).
+        if !backfillActivelyWriting || !loadedHistoryWideOnce {
+            await loadHistoryWide()
+            loadedHistoryWideOnce = true
+        }
+        announceNewDaysIfNeeded()
+    }
+
+    /// True while the strap is mid history-offload — the SAME signal the "Syncing strap history…" note
+    /// reads (`LiveState.backfilling`, set across BLEManager.startBackfilling/exitBackfilling). Used to
+    /// defer the bulk history-wide reads so they don't contend with the offload's bulk writes (#755).
+    private var backfillActivelyWriting: Bool { liveBackfillingFlag }
+
+    /// 14-day sparklines + the cross-source bundles + the "your cards" series + workouts — everything that
+    /// does NOT depend on `selectedDayOffset`. The bulk of the dashboard's reads; deferred during an active
+    /// backfill (see `loadAll`). Same reads, same derivations, same assignment order as before.
+    private func loadHistoryWide() async {
         // 14-day sparklines — Whoop + Apple Health. These reads are mutually independent (distinct
         // metric keys/sources), so kick them all off concurrently with `async let` and await the
         // results below. Each hits the @MainActor Repository, fires its `await store.*` on the
@@ -2431,15 +2599,12 @@ struct TodayView: View {
         sparks["weight"]      = await weightSpark
         sparks["active_kcal"] = await activeKcalSpark
 
-        // The next block of reads are all mutually independent (distinct keys/sources, none consumes
-        // another's result): the Rest + steps-estimate series, the two provenance resolves, workout +
-        // Apple-daily rows, the two Mi-Band series, and the three "your cards" series. Fire them all
-        // off concurrently with `async let`, then await each where its result is first used — same
-        // data, same derivations, same assignment order as the sequential version, all on the main actor.
-        async let restSeriesA       = repo.exploreSeries(key: "sleep_performance", source: "my-whoop")
+        // Steps ESTIMATE per day (WHOOP 4.0 motion → calibrated steps), the Mi-Band series, workout +
+        // Apple-daily rows, and the three "your cards" series — all history-wide (none depends on the
+        // selected day) and mutually independent (distinct keys/sources). Fire them concurrently with
+        // `async let`, then await each where its result is first used — same data, same derivations, same
+        // assignment order as before. (The Rest score + provenance resolves moved to loadDayScoped, #755.)
         async let stepsEstSeriesA    = repo.exploreSeries(key: "steps_est", source: "my-whoop")
-        async let recoveryResolvedA  = repo.resolvedSeries(key: "recovery", source: Repository.whoopSource)
-        async let restResolvedA      = repo.resolvedSeries(key: "sleep_performance", source: Repository.whoopSource)
         async let workoutsA          = repo.workoutRows()
         async let appleDaysA         = repo.appleDailyRows()
         async let xStepsA            = repo.series(key: "steps", source: "xiaomi-band")
@@ -2448,17 +2613,6 @@ struct TodayView: View {
         async let fitnessAgeSeriesA  = repo.exploreSeries(key: "fitness_age", source: "my-whoop")
         async let vitalitySeriesA    = repo.exploreSeries(key: "vitality", source: "my-whoop")
 
-        // Rest SCORE for the logical day. `exploreSeries` already merges imported + computed
-        // `sleep_performance` (imported-wins), so a Bluetooth-only user sees the on-device Rest
-        // composite and an importer sees the export's figure — exactly like the Rest detail screen.
-        let restSeries = await restSeriesA
-        let restByDay = Dictionary(restSeries.map { ($0.day, $0.value) }, uniquingKeysWith: { _, last in last })
-        // The Rest TILE's sparkline (#614 follow-up). The tile's number is `restScore` (the Rest composite,
-        // 0–100) but its mini-graph used to plot raw sleep MINUTES (`sparks["sleep_total_min"]`), so the
-        // trend didn't track the score it sat under. Plot the SAME merged `sleep_performance` 0–100 series
-        // the score reads instead, windowed to the trailing 14 calendar days like every other spark.
-        sparks["sleep_performance"] = trailingWindow(restSeries, days: 14).map { $0.value }
-
         // Steps ESTIMATE per day (WHOOP 4.0 motion → calibrated steps). exploreSeries reads the computed
         // "-noop" metricSeries the IntelligenceEngine writes, exactly like the Explore "steps_est" metric.
         // Only consulted when a day has no REAL step count (see the .steps tile), so it never overrides a
@@ -2466,25 +2620,6 @@ struct TodayView: View {
         let stepsEstSeries = await stepsEstSeriesA
         stepsEstByDay = Dictionary(stepsEstSeries.map { ($0.day, Int($0.value.rounded())) },
                                    uniquingKeysWith: { _, last in last })
-        // The selected day's Rest, falling back to the series tail only when today itself is selected —
-        // a navigated past day with no Rest row shows "—" rather than borrowing the newest value.
-        restScore = restByDay[selectedDayKey] ?? (selectedDayOffset == 0 ? restSeries.last?.value : nil)
-
-        // Component 4 — resolve the REAL per-day merge winner for the selected day's derived scores. The
-        // cross-source resolver applies the SAME imported-WHOOP > NOOP-computed > Apple-Health precedence
-        // the dashboard merge uses, returning the source that actually supplied each day's value — so the
-        // provenance badge reflects the truth (computed vs imported), never a blanket "on-device". Keyed by
-        // metric so the Charge ring and Rest tile each badge their own winner.
-        var provenance: [String: String] = [:]
-        let recoveryResolved = await recoveryResolvedA
-        if let win = recoveryResolved.points.last(where: { $0.day == selectedDayKey })?.source {
-            provenance["recovery"] = win
-        }
-        let restResolved = await restResolvedA
-        if let win = restResolved.points.last(where: { $0.day == selectedDayKey })?.source {
-            provenance["sleep_performance"] = win
-        }
-        provenanceByMetric = provenance
 
         workouts = await workoutsA
         appleDays = await appleDaysA
@@ -2510,6 +2645,56 @@ struct TodayView: View {
             let farFuture = Int(Date.distantFuture.timeIntervalSince1970)
             xiaomiSleeps = ((try? await store.sleepSessions(deviceId: "xiaomi-band", from: 0, to: farFuture, limit: 4000))?.count) ?? 0
         }
+    }
+
+    /// The reads that follow `selectedDayOffset`: the selected day's Rest score + provenance, its HR
+    /// window + axis, the overlapping sleep band, today's in-progress Effort, and the one-shot auto-land.
+    /// A handful of queries, so this ALWAYS runs on a refresh / day-switch / tab-return — the screen stays
+    /// responsive even while the heavy history-wide set is deferred during a backfill (#755). The Rest tile
+    /// sparkline (`sparks["sleep_performance"]`) is derived from the SAME `restSeries` read here so the
+    /// tile's number and its mini-graph stay consistent and day-fresh. Byte-identical to the old inline
+    /// values; only the read's location moved.
+    ///
+    /// Returns `true` when the one-shot #605/#739 auto-land fired and changed `selectedDayOffset` (the
+    /// caller then bails, since changing the offset re-fires the whole task for the landed day) — this
+    /// preserves the old `return` that skipped the rest of the pass.
+    @discardableResult
+    private func loadDayScoped() async -> Bool {
+        // Rest series + the two provenance resolves — all day-keyed outputs, none consumes another's
+        // result, so fire them concurrently and await where first used.
+        async let restSeriesA       = repo.exploreSeries(key: "sleep_performance", source: "my-whoop")
+        async let recoveryResolvedA = repo.resolvedSeries(key: "recovery", source: Repository.whoopSource)
+        async let restResolvedA     = repo.resolvedSeries(key: "sleep_performance", source: Repository.whoopSource)
+
+        // Rest SCORE for the logical day. `exploreSeries` already merges imported + computed
+        // `sleep_performance` (imported-wins), so a Bluetooth-only user sees the on-device Rest
+        // composite and an importer sees the export's figure — exactly like the Rest detail screen.
+        let restSeries = await restSeriesA
+        let restByDay = Dictionary(restSeries.map { ($0.day, $0.value) }, uniquingKeysWith: { _, last in last })
+        // The Rest TILE's sparkline (#614 follow-up). The tile's number is `restScore` (the Rest composite,
+        // 0–100) but its mini-graph used to plot raw sleep MINUTES (`sparks["sleep_total_min"]`), so the
+        // trend didn't track the score it sat under. Plot the SAME merged `sleep_performance` 0–100 series
+        // the score reads instead, windowed to the trailing 14 calendar days like every other spark.
+        sparks["sleep_performance"] = trailingWindow(restSeries, days: 14).map { $0.value }
+        // The selected day's Rest, falling back to the series tail only when today itself is selected —
+        // a navigated past day with no Rest row shows "—" rather than borrowing the newest value.
+        restScore = restByDay[selectedDayKey] ?? (selectedDayOffset == 0 ? restSeries.last?.value : nil)
+
+        // Component 4 — resolve the REAL per-day merge winner for the selected day's derived scores. The
+        // cross-source resolver applies the SAME imported-WHOOP > NOOP-computed > Apple-Health precedence
+        // the dashboard merge uses, returning the source that actually supplied each day's value — so the
+        // provenance badge reflects the truth (computed vs imported), never a blanket "on-device". Keyed by
+        // metric so the Charge ring and Rest tile each badge their own winner.
+        var provenance: [String: String] = [:]
+        let recoveryResolved = await recoveryResolvedA
+        if let win = recoveryResolved.points.last(where: { $0.day == selectedDayKey })?.source {
+            provenance["recovery"] = win
+        }
+        let restResolved = await restResolvedA
+        if let win = restResolved.points.last(where: { $0.day == selectedDayKey })?.source {
+            provenance["sleep_performance"] = win
+        }
+        provenanceByMetric = provenance
 
         // HR trend for the SELECTED day — 5-minute bucket means from that logical day's local midnight.
         // For today the window runs to now (an in-progress curve); for a navigated past day it runs the
@@ -2546,7 +2731,7 @@ struct TodayView: View {
             let todayStart = cal.startOfDay(for: Repository.logicalDay(Date()))
             let latestStart = cal.startOfDay(for: latest)
             let back = cal.dateComponents([.day], from: latestStart, to: todayStart).day ?? 0
-            if back > 0, back <= Self.autoLandMaxDaysBack { selectedDayOffset = back; return }
+            if back > 0, back <= Self.autoLandMaxDaysBack { selectedDayOffset = back; return true }
         }
 
         // In-progress Effort for TODAY (#402): score today's strain over the SAME window the HR curve
@@ -2577,7 +2762,7 @@ struct TodayView: View {
             .filter { $0.endTs > windowStart && $0.startTs < windowEnd }
             .max(by: { ($0.endTs - $0.startTs) < ($1.endTs - $1.startTs) })
 
-        announceNewDaysIfNeeded()
+        return false
     }
 
     /// Post a single honest `.reading` update to the inbox when a refresh brought in genuinely NEWER
@@ -2905,6 +3090,24 @@ private struct SyncingHistoryNoteIfBackfilling: View {
     @EnvironmentObject private var live: LiveState
     var body: some View {
         if live.backfilling { SyncingHistoryNote(chunks: live.syncChunksThisSession) }
+    }
+}
+
+/// #755: a zero-size leaf that mirrors `LiveState.backfilling` into a parent `@Binding` so TodayView can
+/// read the offload state to defer its heavy reads WITHOUT itself observing LiveState (which would re-flood
+/// the whole dashboard `body` on every ~1 Hz live tick — the scroll-stutter the rest of this file avoids).
+/// This leaf owns the observation but renders nothing and re-renders only itself; it pushes only the
+/// boolean EDGE up (not the per-tick chunk count), and writes the binding from `.onAppear`/`.onChange`
+/// (never during its own body evaluation). The parent's @State therefore flips ~twice per offload, not 1 Hz.
+private struct BackfillFlagBridge: View {
+    @EnvironmentObject private var live: LiveState
+    @Binding var flag: Bool
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .onAppear { if flag != live.backfilling { flag = live.backfilling } }
+            .onChangeCompat(of: live.backfilling) { now in if flag != now { flag = now } }
     }
 }
 

@@ -311,10 +311,23 @@ final class AppModel: ObservableObject {
         }.store(in: &hrCancellables)
         // A completed backfill has just written strap history. Refresh the dashboard cache,
         // but leave heavyweight analysis to its own guarded/background-friendly path.
+        //
+        // #755 COALESCE: a strap whose firmware segments a deep offload into many small HISTORY_COMPLETE
+        // slices stamps `lastSyncedAt` once PER slice (BLEManager.exitBackfilling), seconds apart, for the
+        // whole multi-minute download. Without coalescing each slice fired refreshAfterCompletedBackfill()
+        // — a full repo.refresh (~50 store reads) + analyzeRecent — and every one re-fired TodayView's
+        // ~50-read loadAll, all contending with the backfill's bulk writes on the single-connection store.
+        // On a heavy + actively-syncing history that stacked into a ~10s freeze. `.debounce` collapses the
+        // slice storm: it suppresses the intermediate emissions and fires ONCE, 2s after the stream goes
+        // quiet — i.e. after the LAST slice lands (the backfill is done). Crucially it ALWAYS delivers the
+        // trailing edge, so the dashboard still refreshes with the newly-synced data — freshness is kept,
+        // we just stop re-doing it dozens of times mid-download. removeDuplicates() still drops a slice that
+        // stamped an identical second; the trailing refresh after a real change is never dropped.
         live.$lastSyncedAt
             .dropFirst()
             .compactMap { $0 }
             .removeDuplicates()
+            .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 Task { [weak self] in await self?.refreshAfterCompletedBackfill() }
             }
