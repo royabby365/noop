@@ -145,4 +145,56 @@ public final class FrameRouter {
     static func advertisingName(in frame: [UInt8]) -> String? {
         guard frame.count > 2 else { return nil }
         let length = Int(frame[1]) | (Int(frame[2]) << 8)        // crc32 starts here
-        let start = whoop4InnerOffset + 5                        // skip type,
+        let start = whoop4InnerOffset + 5                        // skip type,seq,cmd,origin_seq,result
+        guard length <= frame.count, start < length else { return nil }
+        let printable = frame[start..<length].filter { $0 >= 32 && $0 < 127 }
+        return String(decoding: printable, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The result byte of a COMMAND_RESPONSE: inner offset + 4 ([type,seq,cmd,origin_seq] then result).
+    static func commandResultByte(in frame: [UInt8]) -> Int? {
+        let idx = whoop4InnerOffset + 4
+        return idx < frame.count ? Int(frame[idx]) : nil
+    }
+
+    /// Human-readable ack for a SET_ADVERTISING_NAME result byte (same codes as the prototype:
+    /// 0 Failure, 1 Success, 2 Pending, 3 Unsupported).
+    static func renameAck(for result: Int?) -> String {
+        switch result {
+        case 1:  return "Renamed — your strap reboots to apply the new name."
+        case 0:  return "The strap rejected the rename (failure)."
+        case 2:  return "Rename pending…"
+        case 3:  return "This strap firmware doesn't support renaming."
+        default: return "Rename sent — re-scan to confirm the new name."
+        }
+    }
+
+    /// Live-gesture freshness window (s). A DOUBLE_TAP / WRIST_ON / WRIST_OFF fires its live handler only
+    /// if its event_timestamp is within this of `now` — so a *replayed historical* gesture during a
+    /// backfill offload (old ts) is ignored, but a real-time one fires even mid-sync.
+    static let liveGestureWindowSeconds = 45
+
+    /// Parse an EVENT frame and fire ONLY the live physical-gesture handlers (double-tap / wrist) iff the
+    /// event is recent. Called for offload frames during backfill — where `handle(frame:)` is skipped —
+    /// so a real-time gesture still works mid-offload (#69: the 5/MG offload runs for minutes). `now`
+    /// MUST be in the SAME clock domain as event_timestamp (the strap's RTC): the caller passes the
+    /// strap's own clock-now (BLEManager.strapClockNow), so the gate is robust to a grossly-stale strap
+    /// RTC (fix #72) — a live gesture is ~now in the strap's clock, a historical replay is old in it.
+    /// Deliberately does NOT touch lastEvent / sync trigger / bonded / battery — those stay on the normal
+    /// handle(frame:) path, so backfill UI behaviour is otherwise unchanged.
+    func dispatchLiveGestureIfFresh(frame: [UInt8], now: Int = Int(Date().timeIntervalSince1970)) {
+        let parsed = parseFrame(frame, family: family)
+        guard parsed.ok, parsed.crcOK != false else { return }
+        guard parsed.typeName == "EVENT", let ev = parsed.parsed["event"]?.stringValue else { return }
+        guard let ts = parsed.parsed["event_timestamp"]?.intValue, ts > 0 else { return }   // fail closed
+        guard abs(now - ts) <= FrameRouter.liveGestureWindowSeconds else { return }
+        if ev.hasPrefix("DOUBLE_TAP") {
+            state.onDoubleTap?()
+        } else if ev.hasPrefix("WRIST_ON") {
+            if !state.worn { state.worn = true; state.onWristChange?(true) }
+        } else if ev.hasPrefix("WRIST_OFF") {
+            if state.worn { state.worn = false; state.onWristChange?(false) }
+        }
+    }
+}
