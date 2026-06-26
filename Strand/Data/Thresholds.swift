@@ -3,8 +3,9 @@ import Foundation
 /// Centralized thresholds and configuration constants for NOOP.
 /// Replaces magic numbers scattered across detectors, engines, and policies.
 /// Keeping these in one place makes tuning easier and behavior more transparent.
+@usableFromInline
 enum Thresholds {
-    
+    @usableFromInline
     // MARK: - BLE / Connection
     
     /// MarginalRadioDetector: consecutive arm-then-quick-timeout cycles before fallback
