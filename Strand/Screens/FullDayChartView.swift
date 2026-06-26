@@ -1,6 +1,7 @@
 import SwiftUI
 import StrandDesign
 import WhoopStore
+import WhoopProtocol
 
 // MARK: - Deep Timeline (full-day, full-resolution metric viewer) — #575
 //
