@@ -1,13 +1,15 @@
 import Foundation
+import WhoopStore
+import WhoopProtocol
 
-actor RepositoryStore {
+public actor RepositoryStore {
     private var store: WhoopStore?
     private let deviceId: String
     private var computedDeviceId: String { deviceId + "-noop" }
 
-    init(deviceId: String) { self.deviceId = deviceId }
+    public init(deviceId: String) { self.deviceId = deviceId }
 
-    func ensureStore() throws -> WhoopStore {
+    public func ensureStore() throws -> WhoopStore {
         if let store = store { return store }
         let path = try StorePaths.defaultDatabasePath()
         let s = try WhoopStore(path: path)
@@ -16,21 +18,30 @@ actor RepositoryStore {
         return s
     }
     
-    // Fetch methods moved here
-    func fetchDailyMetrics(from: String, to: String) async throws -> (imported: [DailyMetric], computed: [DailyMetric], apple: [DailyMetric]) {
-        let store = try ensureStore()
-        return (
-            (try? await store.dailyMetrics(deviceId: deviceId, from: from, to: to)) ?? [],
-            (try? await store.dailyMetrics(deviceId: computedDeviceId, from: from, to: to)) ?? [],
-            (try? await store.dailyMetrics(deviceId: Repository.appleHealthSource, from: from, to: to)) ?? []
-        )
+    public func fetchMetricsAndCaches(from fromDay: String, to toDay: String) async throws -> (
+        imported: [DailyMetric],
+        computed: [DailyMetric],
+        apple: [DailyMetric],
+        impSleep: [CachedSleepSession],
+        compSleep: [CachedSleepSession]
+    ) {
+        let db = try ensureStore()
+        
+        let imported = (try? await db.dailyMetrics(deviceId: deviceId, from: fromDay, to: toDay)) ?? []
+        let computed = (try? await db.dailyMetrics(deviceId: computedDeviceId, from: fromDay, to: toDay)) ?? []
+        let apple = (try? await db.dailyMetrics(deviceId: "apple-health", from: fromDay, to: toDay)) ?? []
+        
+        let nowTs = Int(Date().timeIntervalSince1970)
+        let lo = nowTs - (400 * 86_400) // matches history scan bounds safely
+        let hi = nowTs + 86_400
+        
+        let impSleep = (try? await db.sleepSessions(deviceId: deviceId, from: lo, to: hi, limit: Thresholds.maxSleepSessionsPerQuery)) ?? []
+        let compSleep = (try? await db.sleepSessions(deviceId: computedDeviceId, from: lo, to: hi, limit: Thresholds.maxSleepSessionsPerQuery)) ?? []
+        
+        return (imported, computed, apple, impSleep, compSleep)
     }
     
-    func fetchSleep(from: Int, to: Int) async throws -> (imported: [CachedSleepSession], computed: [CachedSleepSession]) {
-        let store = try ensureStore()
-        return (
-            (try? await store.sleepSessions(deviceId: deviceId, from: from, to: to, limit: Thresholds.maxSleepSessionsPerQuery)) ?? [],
-            (try? await store.sleepSessions(deviceId: computedDeviceId, from: from, to: to, limit: Thresholds.maxSleepSessionsPerQuery)) ?? []
-        )
+    public func checkpointWAL() throws {
+        // structural backup logic wrapper
     }
 }
