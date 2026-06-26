@@ -1,5 +1,7 @@
 import Foundation
 import StrandAnalytics
+import WhoopProtocol
+import WhoopStore
 
 /// Evaluates illness/strain early-warning signals from daily metrics and journal confounders.
 /// Runs the IllnessSignalEngine and publishes the result + legacy healthAlert banner.
