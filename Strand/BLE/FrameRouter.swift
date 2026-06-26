@@ -124,7 +124,10 @@ case "EVENT":
             if family == .whoop5, parsed.typeName == "0x2F" || parsed.typeName == "HISTORICAL_DATA" {
                 // R22 deep-data frames come through as HISTORICAL_DATA (type 47) or raw 0x2F
                 // The schema decode handles known layouts; unknown layouts reach here
-                log?("R22 frame received: \(parsed.typeName), fields: \(parsed.fields.count)")
+                let histVersion = parsed.parsed["hist_version"]?.intValue ?? -1
+let fieldCount = parsed.fields.count
+log?("R22 historical frame: version=\(histVersion), fields=\(fieldCount)")
+
             }
             break
         }
