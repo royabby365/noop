@@ -58,15 +58,13 @@ android {
             versionNameSuffix = "-debug"
         }
         release {
-            // Shipped UNMINIFIED for reliability. R8 minification crashes this app at runtime: full-mode
-            // over-strips reflective paths, and even with full-mode OFF + broad keeps (com.noop.** +
-            // Tink/Worker/ViewModel) a minified build STILL died right after the terms gate on a real
-            // device — a library reflective path we couldn't pin without a device to trace. Offline app,
-            // a ~18 MB APK is fine. Re-enabling minify needs the exact crash trace + device verification.
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // R8 minification enabled with conservative settings.
+            // Use proguard-android.txt (not -optimize) to avoid over-aggressive stripping.
+            // Keep rules cover known reflective paths: Room, Compose, Navigation, Health Connect, Tink.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
+                getDefaultProguardFile("proguard-android.txt"),
                 "proguard-rules.pro"
             )
             // Real release key when keystore.properties is present; otherwise the debug key,

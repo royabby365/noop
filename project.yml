@@ -34,6 +34,14 @@ settings:
     Release:
       # Distribution builds must produce a universal binary, not just the host arch.
       ONLY_ACTIVE_ARCH: NO
+      # Size optimizations: strip symbols, dead-code strip, optimize for size.
+      DEAD_CODE_STRIPPING: YES
+      STRIP_INSTALLED_PRODUCT: YES
+      STRIP_STYLE: all
+      OPTIMIZATION_LEVEL: s
+      DEPLOYMENT_POSTPROCESSING: YES
+      # Asset catalog: optimize for size (compresses images, removes alpha for opaque).
+      ASSETCATALOG_COMPILER_OPTIMIZATION: space
 packages:
   # Renders the Coach's LLM replies (GitHub-flavored Markdown — bold, lists,
   # headings, tables). Pinned exactly for reproducible community builds.
@@ -133,6 +141,19 @@ targets:
         # distributed (ad-hoc) build. The app uses no JIT / unsigned-exec memory, so it's safe.
         ENABLE_HARDENED_RUNTIME: YES
         COMBINE_HIDPI_IMAGES: YES
+      configs:
+        Release:
+          # Size optimizations: dead-code strip, strip symbols, optimize for size.
+          DEAD_CODE_STRIPPING: YES
+          STRIP_INSTALLED_PRODUCT: YES
+          STRIP_STYLE: all
+          OPTIMIZATION_LEVEL: s
+          DEPLOYMENT_POSTPROCESSING: YES
+          COPY_PHASE_STRIP: YES
+          # Asset catalog: optimize for size (compresses images, removes alpha for opaque).
+          ASSETCATALOG_COMPILER_OPTIMIZATION: space
+          # Swift: strip symbols from the binary.
+          SWIFT_OPTIMIZATION_LEVEL: "-Osize"
     dependencies:
       - package: WhoopProtocol
       - package: WhoopStore
@@ -295,6 +316,19 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_EMIT_LOC_STRINGS: YES
+      configs:
+        Release:
+          # Size optimizations: dead-code strip, strip symbols, optimize for size.
+          DEAD_CODE_STRIPPING: YES
+          STRIP_INSTALLED_PRODUCT: YES
+          STRIP_STYLE: all
+          OPTIMIZATION_LEVEL: s
+          DEPLOYMENT_POSTPROCESSING: YES
+          COPY_PHASE_STRIP: YES
+          # Asset catalog: optimize for size (compresses images, removes alpha for opaque).
+          ASSETCATALOG_COMPILER_OPTIMIZATION: space
+          # Swift: strip symbols from the binary.
+          SWIFT_OPTIMIZATION_LEVEL: "-Osize"
     dependencies:
       - package: WhoopProtocol
       - package: WhoopStore
