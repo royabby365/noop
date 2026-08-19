@@ -35,7 +35,7 @@ concurrency:
 
 jobs:
   bump:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vps]
     outputs:
       ver: ${{ steps.b.outputs.ver }}
       tag: ${{ steps.b.outputs.tag }}
@@ -147,7 +147,7 @@ jobs:
 
   android:
     needs: bump
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, bd]
     defaults:
       run:
         working-directory: android
@@ -256,7 +256,7 @@ jobs:
   # Best-effort: a missing manifest / IPA asset / push conflict WARNS and skips, never failing the release.
   altstore:
     needs: [bump, ios]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vps]
     steps:
       - uses: actions/checkout@v4
         with:

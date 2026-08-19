@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   meta:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vps]
     outputs:
       tag: ${{ steps.m.outputs.tag }}
       ver: ${{ steps.m.outputs.ver }}
@@ -51,7 +51,7 @@ jobs:
 
   android:
     needs: meta
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, bd]
     defaults:
       run:
         working-directory: android
